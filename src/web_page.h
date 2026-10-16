@@ -26,7 +26,7 @@ static const char kWebPage[] PROGMEM = R"INERTIAWEB(<!doctype html><html lang="j
 <button id="download" disabled>測定CSVを保存</button><button id="clear" disabled>ログ消去・接続と停止を再確認</button>
 <p id="log-status" class="muted"></p><p class="notice">未保存のログは電源断・再起動で失われます。次の測定を始める前に保存してください。中断・異常終了した記録も保存できます。</p>
 <p class="muted">この測定から直接求められるのは「電流に対する加速」です。慣性モーメントへの換算には独立したトルク定数が必要です。仮定した定数を使う場合は、条件付きの推定値として解析します。</p></section>
-<p class="muted">atoms3r_inertia_v1_20261016 · Wi-Fi: AtomS3R_Inertia · 192.168.4.1</p>
+<p class="muted">atoms3r_inertia_v1_1_20261016 · Wi-Fi: AtomS3R_Inertia · 192.168.4.1</p>
 <script>
 const el=id=>document.getElementById(id);let last=null,history=[],saved=false,runKey=null;
 const names={idle:'待機',settling:'停止を確認中',pre:'入力前を記録',pulse:'電流を入力中',post:'出力OFF・記録中',done:'完了',stopped:'操作で停止',fault:'異常で停止'};

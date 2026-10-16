@@ -11,7 +11,7 @@
 
 using inertia::Phase;
 using inertia::Settings;
-constexpr char kRevision[] = "atoms3r_inertia_v1_20261016";
+constexpr char kRevision[] = "atoms3r_inertia_v1_1_20261016";
 constexpr uint8_t kAddr = 0x64;
 WebServer server(80);
 portMUX_TYPE snapshotMux = portMUX_INITIALIZER_UNLOCKED;
@@ -146,16 +146,18 @@ void serviceTimers() {
       finish(Phase::Fault, "pulse_deadline_overrun"); return;
     }
     phase = Phase::Post; phaseStart = clockUs(); reason = "recording_coast";
+    // Do not reuse the pre-I2C 'now' to test a newly entered state's duration.
+    return;
   }
   if (phase == Phase::Settling) {
-    if (now - phaseStart > inertia::kSettleTimeoutUs) {
+    if (inertia::elapsed(now, phaseStart, inertia::kSettleTimeoutUs + 1)) {
       finish(Phase::Fault, "wheel_did_not_stop_in_30s"); return;
     }
     if (inertia::stoppedLongEnough(now, stillSince)) {
       phase = Phase::Pre; phaseStart = now; reason = "recording_pre";
     }
   }
-  if (phase == Phase::Pre && now - phaseStart >= inertia::kPreUs) {
+  if (phase == Phase::Pre && inertia::elapsed(now, phaseStart, inertia::kPreUs)) {
     health.slow_age_us = static_cast<uint32_t>(now - slowTime);
     const char* bad = inertia::unhealthy(settings, health);
     if (bad) { finish(Phase::Fault, bad); return; }
@@ -174,7 +176,7 @@ void serviceTimers() {
     phase = Phase::Pulse; phaseStart = clockUs(); reason = "current_pulse";
     pulseDeadline = runStart + pulses[pulseIndex].on + settings.duration_ms * 1000ULL;
   }
-  if (phase == Phase::Post && now - phaseStart >= inertia::kPostUs) {
+  if (phase == Phase::Post && inertia::elapsed(now, phaseStart, inertia::kPostUs)) {
     pulses[pulseIndex].complete = true;
     if (pulseIndex + 1 == inertia::pulseCount(settings)) {
       finish(Phase::Done, "completed");

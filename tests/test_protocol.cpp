@@ -24,5 +24,12 @@ int main() {
   assert(!due(1000,0)); assert(!due(999,1000)); assert(due(1000,1000));
   assert(!stoppedLongEnough(2000000,0)); assert(!stoppedLongEnough(1000000,1));
   assert(stoppedLongEnough(1000001,1));
+  // Regression: pulse-end I2C writes advanced the clock after 'now' was cached.
+  // A start 500 us in the future must not make a two-second POST complete.
+  const uint64_t cached_now = 2000000, post_entered = cached_now + 500;
+  assert(!elapsed(cached_now, post_entered, kPostUs));
+  assert(!elapsed(post_entered + kPostUs - 1, post_entered, kPostUs));
+  assert(elapsed(post_entered + kPostUs, post_entered, kPostUs));
+  assert(!stoppedLongEnough(cached_now, cached_now + 1));
   return 0;
 }

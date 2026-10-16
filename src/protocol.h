@@ -79,5 +79,10 @@ inline const char* unhealthy(const Settings& s, const Health& h) {
 }
 // The firmware uses real microsecond timestamps, never nominal sample indices.
 inline bool due(uint64_t now, uint64_t deadline) { return deadline && now >= deadline; }
-inline bool stoppedLongEnough(uint64_t now, uint64_t since) { return since && now - since >= kStillUs; }
+inline bool elapsed(uint64_t now, uint64_t since, uint64_t duration) {
+  // A transition can set since from a clock read later than the caller's
+  // cached now. Unsigned subtraction alone would treat that as a huge wait.
+  return now >= since && now - since >= duration;
+}
+inline bool stoppedLongEnough(uint64_t now, uint64_t since) { return since && elapsed(now, since, kStillUs); }
 } // namespace inertia
