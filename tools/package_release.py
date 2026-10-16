@@ -25,7 +25,7 @@ commit = args.build_sha
 if not commit:
     result = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, capture_output=True, text=True)
     commit = result.stdout.strip() if result.returncode == 0 else 'local-uncommitted'
-manifest = {'name':'AtomS3R 電流・回転応答測定', 'version':'1.0.1-20261016-'+commit[:7], 'buildSha':commit,
+manifest = {'name':'AtomS3R 電流・回転応答測定', 'version':'1.0.2-20261016-'+commit[:7], 'buildSha':commit,
             'builds':[{'chipFamily':'ESP32-S3','parts':[{'path':'firmware/'+name,'offset':offset} for name,offset in parts]}]}
 (flash/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
 sums=[]
@@ -33,13 +33,13 @@ for path in sorted(images.glob('*.bin')):
     sums.append(hashlib.sha256(path.read_bytes()).hexdigest()+'  firmware/'+path.name)
 (flash/'SHA256SUMS.txt').write_text('\n'.join(sums)+'\n',encoding='ascii')
 info = {'commit':commit,'version':manifest['version'],'hardware_tested':False,
-        'revision':'atoms3r_inertia_v1_1_20261016','firmware_hashes':sums}
+        'revision':'atoms3r_response_v1_2_20261016','firmware_hashes':sums}
 (flash/'build-info.json').write_text(json.dumps(info,ensure_ascii=False,indent=2),encoding='utf-8')
 args.out.mkdir(parents=True,exist_ok=True)
 payload = []
 for path in root.rglob('*'):
     rel=path.relative_to(root)
-    included = rel.parts[0] in ('src','tests','tools','web','flash','.github') or rel.as_posix() in ('.gitattributes','.gitignore','platformio.ini','README.md','start_flasher.cmd')
+    included = rel.parts[0] in ('src','tests','tools','web','flash','docs','.github') or rel.as_posix() in ('.gitattributes','.gitignore','platformio.ini','README.md','start_flasher.cmd')
     if included and path.is_file() and not any(x in ('.pio','__pycache__','.git','dist','analysis') for x in rel.parts):
         payload.append(path)
 archive=args.out/'AtomS3R_電流回転応答測定_20261016.zip'

@@ -1,10 +1,11 @@
 <!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AtomS3R 電流・回転応答測定の書き込み</title>
 <script type="module" src="https://unpkg.com/esp-web-tools@10.1.1/dist/web/install-button.js?module"></script>
 <style>body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;padding:20px;background:#f0f4f7;color:#183047;line-height:1.8}section{padding:24px;background:white;border:1px solid #d7e0e8;border-radius:12px}button{padding:16px 24px;font:inherit;background:#164b7a;color:#fff;border:0;border-radius:8px;cursor:pointer}code{background:#eef2f6;padding:2px 5px}a{color:#164b7a}</style></head><body>
-<h1>AtomS3R 電流・回転応答測定</h1><section><p>今のホイールと重りを付けた状態で、電流パルスに対する回転数・実電流を記録する測定版です。</p>
+<h1>AtomS3R 電流・回転応答測定</h1><section><p>今のホイールと重りを付けた状態で、電流パルスに対する位置・回転数・実電流を記録する測定版です。<strong>1.0.2では、位置の変化と速度の読み値を比較する測定を追加しました。</strong></p>
 <p>AtomS3RをUSBで接続し、PC版ChromeまたはEdgeで書き込んでください。書き込み中はPCをインターネットへ接続します。</p>
 <esp-web-install-button manifest="manifest.json"><button slot="activate">測定用プログラムを書き込む</button><span slot="unsupported">PC版ChromeまたはEdgeを使用してください。</span></esp-web-install-button>
-<ol><li>書き込み後、Wi-Fi <code>AtomS3R_Inertia</code>（パスワード <code>12345678</code>）へ接続します。</li><li><a href="http://192.168.4.1/">http://192.168.4.1/</a>を開きます。</li><li>機体全体を固定し、単発 <strong>+100 mA・100 ms</strong>を確認します。次に−100 mA・100 msを確認します。</li><li>各CSVを保存し、自動測定へ進む場合は<strong>50・100・150 mA、400 ms、3反復</strong>を選びます。</li><li>完了後にCSVを保存します。</li></ol>
+<ol><li>書き込み後、Wi-Fi <code>AtomS3R_Inertia</code>（パスワード <code>12345678</code>）へ接続します。</li><li><a href="http://192.168.4.1/">http://192.168.4.1/</a>を開きます。</li><li>前回と同じように胴体と脚を固定し、ホイールだけが回るようにします。単発 <strong>+100 mA・100 ms</strong>、次に<strong>−100 mA・100 ms</strong>を測り、各CSVを保存します。位置の表示が変化することを確認してください。</li><li>「今回：300 mA・4時間幅・正逆各3回」を選びます。<strong>300 mA、30・50・100・200 msを正逆各3回、計24パルス</strong>測ります。回転数上限1500 rpm、電圧下限6000 mVを使います。</li><li>入力後は出力OFFで3秒記録し、各入力前に静止を待ちます。本測定は通常約2分です。完了後にCSVを保存してください。</li></ol>
+<p>位置の表示が変わらない、エラーで止まる場合は、そのCSVを保存して本測定へ進まず確認します。今回の本測定は1本の中で各条件を3反復するので、同じ自動測定をさらに3回行う必要はありません。</p>
 <p>既存の制御プログラムを書き換えるため、実験後に制御版へ戻す場合は元の書き込みページを使用してください。実機動作は未検証です。</p>
 <p><a href="https://github.com/temesotejam/atoms3r-motor-inertia-test#readme">測定と解析の手順・ソースコード</a></p>
 <p>公開ビルド: <code id="build-version">確認中…</code><br>コミット: <a id="build-commit" href="build-info.json">確認中…</a><br><a href="SHA256SUMS.txt">ビルド済みファイルのSHA-256</a></p></section>

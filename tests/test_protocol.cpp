@@ -31,5 +31,23 @@ int main() {
   assert(!elapsed(post_entered + kPostUs - 1, post_entered, kPostUs));
   assert(elapsed(post_entered + kPostUs, post_entered, kPostUs));
   assert(!stoppedLongEnough(cached_now, cached_now + 1));
+  Settings response;response.single=false;response.response=true;response.single_mA=300;
+  assert(!validate(response));assert(pulseCount(response)==24);
+  assert(samplePeriod(response)==5000 && postPeriod(response)==3000000);
+  for(unsigned rep=0;rep<3;++rep) {
+    std::set<int> signedWidths;
+    for(unsigned i=rep*8;i<(rep+1)*8;++i) {
+      assert(command(response,i)==300 || command(response,i)==-300);
+      signedWidths.insert((command(response,i)>0?1:-1)*durationMs(response,i));
+    }
+    assert(signedWidths==std::set<int>({-200,-100,-50,-30,30,50,100,200}));
+  }
+  response.repeats=4;assert(validate(response));response.repeats=3;
+  response.single_mA=301;assert(validate(response));response.single_mA=300;
+  assert(positionDelta(INT32_MIN+10,INT32_MAX-10)==21);
+  assert(positionDelta(INT32_MAX-10,INT32_MIN+10)==-21);
+  assert(positionDelta(-12000,13000)==-25000);
+  assert(!elapsed(1000000,1000001,postPeriod(response)));
+  assert(elapsed(4000000,1000000,postPeriod(response)));
   return 0;
 }

@@ -20,7 +20,7 @@ def read_log(path):
         if line.startswith('# ') and '=' in line:
             key, value = line[2:].split('=', 1)
             meta[key] = value
-    if meta.get('schema') != 'atoms3r_inertia_v1':
+    if meta.get('schema') not in ('atoms3r_inertia_v1', 'atoms3r_inertia_v2'):
         raise ValueError(f'{path}: unsupported CSV schema')
     if meta.get('configuration') != 'current_wheel_and_weights':
         raise ValueError(f'{path}: different wheel configuration')
@@ -55,7 +55,7 @@ def pulse_windows(meta, table, path, trim_ms=200, width_ms=60):
             d['rejection'] = 'run_not_completed'; continue
         if not (d['complete'] and on > 0 and zero > on and off >= zero):
             d['rejection'] = 'pulse_not_complete'; continue
-        if abs((zero-on)/1000 - float(meta['pulse_width_ms'])) > 10:
+        if abs((zero-on)/1000 - float(first.get('pulse_width_ms_setting', meta['pulse_width_ms']))) > 10:
             d['rejection'] = 'pulse_timing_error'; continue
         valid = [r for r in rows if all(int(r[k]) for k in ('speed_valid', 'current_valid', 'status_valid'))
                  and not int(r['motor_error'])]

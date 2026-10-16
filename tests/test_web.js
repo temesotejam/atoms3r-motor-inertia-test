@@ -14,6 +14,12 @@ const context=vm.createContext({document:{getElementById:id=>nodes[id]},AbortSig
 (async()=>{
   vm.runInContext(script,context);await new Promise(setImmediate);
   assert(nodes.start.disabled);nodes.fixed.checked=true;nodes.fixed.onchange();assert(!nodes.start.disabled);
+  nodes.mode.value='response';nodes.mode.onchange();assert(nodes['single-area'].hidden);
+  assert(!nodes['response-area'].hidden);assert(nodes.duration.disabled);assert(nodes.start.disabled);
+  status={...status,position_valid:true,position_deg:12.3,motor_firmware:4};
+  await vm.runInContext('update()',context);assert(!nodes.start.disabled);
+  assert.equal(nodes.current.value,300);assert.equal(nodes.repeats.value,3);
+  await nodes.start.onclick();assert.equal(sent.at(-1).body.get('mode'),'response');sent=[];
   nodes.mode.value='batch';nodes.mode.onchange();assert.equal(nodes.duration.value,400);assert(nodes['single-area'].hidden);assert(!nodes['batch-area'].hidden);
   await nodes.start.onclick();assert.equal(sent[0].url,'/start');assert.equal(sent[0].body.get('fixed'),'1');assert.equal(sent[0].body.get('mode'),'batch');assert.equal(sent[0].body.get('level3'),'150');
   status={...status,phase:'pulse',active:true,ready:false,rows:50,stop_confirmed:false,run:1};

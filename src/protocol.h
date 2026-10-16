@@ -25,6 +25,7 @@ inline bool active(Phase p) {
 }
 struct Settings {
   bool single = true;
+  bool response = false;
   int16_t single_mA = 100;
   int16_t levels_mA[3] = {50, 100, 150};
   uint16_t duration_ms = 100;
@@ -36,9 +37,11 @@ struct Settings {
 inline const char* validate(const Settings& s) {
   if (s.duration_ms < 50 || s.duration_ms > 500) return "pulse_width_50_to_500_ms";
   if (s.repeats < 1 || s.repeats > 5) return "repeats_1_to_5";
+  if (s.response && (s.single || s.repeats > 3 || s.single_mA != 300))
+    return "response_requires_300mA_and_1_to_3_repeats";
   if (s.rpm_limit < 300 || s.rpm_limit > 2500) return "rpm_limit_300_to_2500";
   if (s.min_voltage_mV < 5000 || s.min_voltage_mV > 12000) return "voltage_limit_5000_to_12000";
-  if (s.single) {
+  if (s.single || s.response) {
     if (s.single_mA == 0 || s.single_mA < -300 || s.single_mA > 300) return "single_current_1_to_300_mA";
   } else {
     for (unsigned i = 0; i < 3; ++i)
@@ -48,8 +51,28 @@ inline const char* validate(const Settings& s) {
   }
   return nullptr;
 }
-inline unsigned pulseCount(const Settings& s) { return s.single ? 1 : 6 * s.repeats; }
+inline unsigned pulseCount(const Settings& s) {
+  return s.response ? 8 * s.repeats : (s.single ? 1 : 6 * s.repeats);
+}
+inline uint32_t samplePeriod(const Settings& s) { return s.response ? 5000 : kSampleUs; }
+inline uint32_t postPeriod(const Settings& s) { return s.response ? 3000000 : kPostUs; }
+inline uint16_t durationMs(const Settings& s, unsigned index) {
+  if (!s.response) return s.duration_ms;
+  constexpr uint16_t widths[] = {30, 50, 100, 200};
+  unsigned level = (index % 8) / 2;
+  if ((index / 8) % 2) level = 3 - level;
+  return widths[level];
+}
+inline int64_t positionDelta(int32_t now, int32_t before) {
+  const uint32_t d = static_cast<uint32_t>(now) - static_cast<uint32_t>(before);
+  return d <= INT32_MAX ? static_cast<int64_t>(d) : static_cast<int64_t>(d) - 4294967296LL;
+}
 inline int16_t command(const Settings& s, unsigned index) {
+  if (s.response) {
+    int sign = index % 2 ? -1 : 1;
+    if ((index / 8) % 2) sign = -sign;
+    return sign * 300;
+  }
   if (s.single) return s.single_mA;
   // Alternate signs; reverse level order each repetition to limit drift.
   unsigned level = (index % 6) / 2;

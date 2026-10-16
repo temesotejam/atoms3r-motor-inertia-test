@@ -11,7 +11,7 @@
 
 using inertia::Phase;
 using inertia::Settings;
-constexpr char kRevision[] = "atoms3r_inertia_v1_1_20261016";
+constexpr char kRevision[] = "atoms3r_response_v1_2_20261016";
 constexpr uint8_t kAddr = 0x64;
 WebServer server(80);
 portMUX_TYPE snapshotMux = portMUX_INITIALIZER_UNLOCKED;
@@ -21,6 +21,8 @@ struct Pulse {
   uint32_t on = 0, zero = 0, off = 0;
   int16_t current = 0;
   bool complete = false;
+  int32_t position_start = 0;
+  int64_t position_min = 0, position_max = 0;
 };
 struct Row {
   uint32_t t, speed_start, speed_end, current_start, current_end;
@@ -29,6 +31,8 @@ struct Row {
   uint16_t voltage;
   int16_t temperature, command;
   uint8_t pulse, phase, valid, status, error, output;
+  uint32_t position_start, position_end;
+  int32_t position_raw;
 };
 struct Snapshot {
   Phase phase = Phase::Idle;
@@ -38,6 +42,10 @@ struct Snapshot {
   uint32_t rows = 0, missed = 0, errors = 0, run = 0;
   unsigned pulse = 0, total = 0;
   bool ready = false, stop_confirmed = false, frozen = false;
+  bool position_valid = false;
+  float position_deg = NAN;
+  int16_t motor_firmware = -1;
+  uint32_t sample_period_us = 10000;
   char reason[64] = "initializing";
 } snapshot;
 enum class RequestType : uint8_t { Start, Clear };
@@ -53,6 +61,9 @@ unsigned pulseIndex = 0;
 uint64_t runStart = 0, phaseStart = 0, stillSince = 0, pulseDeadline = 0;
 uint64_t nextSample = 0, slowTime = 0, lastStopRetry = 0;
 int32_t speedRaw = 0, currentRaw = 0;
+int32_t positionRaw = 0;
+bool positionValid = false;
+int16_t motorFirmware = -1;
 uint8_t motorStatus = 0, motorError = 0;
 int16_t commandMa = 0;
 bool output = false, initialized = false, stopConfirmed = false, logFrozen = true;
@@ -71,6 +82,10 @@ void publish() {
   s.pulse = runStart ? pulseIndex + 1 : 0; s.total = runStart ? inertia::pulseCount(settings) : 0;
   s.ready = initialized && stopConfirmed && rows; s.stop_confirmed = stopConfirmed;
   s.frozen = logFrozen;
+  s.position_valid = positionValid;
+  s.position_deg = positionValid ? positionRaw / 100.0f : NAN;
+  s.motor_firmware = motorFirmware;
+  s.sample_period_us = inertia::samplePeriod(settings);
   strlcpy(s.reason, reason, sizeof(s.reason));
   portENTER_CRITICAL(&snapshotMux); snapshot = s; portEXIT_CRITICAL(&snapshotMux);
 }
@@ -126,6 +141,9 @@ bool initializeMotor() {
   const bool off = motorOff();
   const bool mode = write8(0x01, 3);
   initialized = off && mode;
+  uint8_t version = 0;
+  motorFirmware = read8(0xFE, version) && version >= 1 && version <= 127 ? version : -1;
+  positionValid = read32(0x90, positionRaw);
   return initialized;
 }
 void serviceTimers() {
@@ -171,12 +189,16 @@ void serviceTimers() {
     const bool enabled = write8(0x00, 1);
     pulses[pulseIndex].on = relative(clockUs());
     pulses[pulseIndex].current = cmd;
+    pulses[pulseIndex].position_start = positionRaw;
     if (!enabled) { finish(Phase::Fault, "enable_write_failed"); return; }
     commandMa = cmd; output = true; stopConfirmed = false;
     phase = Phase::Pulse; phaseStart = clockUs(); reason = "current_pulse";
-    pulseDeadline = runStart + pulses[pulseIndex].on + settings.duration_ms * 1000ULL;
+    pulseDeadline = runStart + pulses[pulseIndex].on + inertia::durationMs(settings, pulseIndex) * 1000ULL;
   }
-  if (phase == Phase::Post && inertia::elapsed(now, phaseStart, inertia::kPostUs)) {
+  if (phase == Phase::Post && inertia::elapsed(now, phaseStart, inertia::postPeriod(settings))) {
+    if (settings.response && pulses[pulseIndex].position_max - pulses[pulseIndex].position_min < 100) {
+      finish(Phase::Fault, "position_motion_not_observed"); return;
+    }
     pulses[pulseIndex].complete = true;
     if (pulseIndex + 1 == inertia::pulseCount(settings)) {
       finish(Phase::Done, "completed");
@@ -191,6 +213,11 @@ void serviceTimers() {
 void sample(uint64_t scheduled) {
   Row r{}; const uint64_t begin = clockUs();
   r.late = static_cast<uint32_t>(begin > scheduled ? begin - scheduled : 0);
+  r.position_start = relative(clockUs());
+  const bool positionOk = read32(0x90, positionRaw);
+  r.position_end = relative(clockUs());
+  positionValid = positionOk;
+  serviceTimers();
   r.speed_start = relative(clockUs());
   bool speedOk = read32(0x60, speedRaw); r.speed_end = relative(clockUs());
   serviceTimers();
@@ -209,7 +236,7 @@ void sample(uint64_t scheduled) {
       health.temperature_C = static_cast<int16_t>(temp); health.error = motorError; slowTime = clockUs();
     }
   }
-  health.reads_ok = speedOk && currentOk && slowOk;
+  health.reads_ok = speedOk && currentOk && slowOk && (!settings.response || positionOk);
   health.rpm = speedOk ? speedRaw / 100.0f : NAN;
   health.current_mA = currentOk ? currentRaw / 100.0f : NAN;
   health.slow_age_us = static_cast<uint32_t>(clockUs() - slowTime);
@@ -227,9 +254,17 @@ void sample(uint64_t scheduled) {
   }
   r.t = relative(clockUs()); r.slow_t = relative(slowTime);
   r.speed_raw = speedRaw; r.current_raw = currentRaw;
+  r.position_raw = positionRaw;
+  if (positionOk && (phase == Phase::Pulse || phase == Phase::Post)) {
+    Pulse& p = pulses[pulseIndex];
+    const int64_t delta = inertia::positionDelta(positionRaw, p.position_start);
+    p.position_min = min(p.position_min, delta);
+    p.position_max = max(p.position_max, delta);
+  }
   r.voltage = health.voltage_mV; r.temperature = health.temperature_C;
   r.command = commandMa; r.pulse = pulseIndex + 1; r.phase = static_cast<uint8_t>(phase);
-  r.valid = (speedOk ? 1 : 0) | (currentOk ? 2 : 0) | (slowOk && health.slow_age_us <= 250000 ? 4 : 0);
+  r.valid = (speedOk ? 1 : 0) | (currentOk ? 2 : 0) |
+      (slowOk && health.slow_age_us <= 250000 ? 4 : 0) | (positionOk ? 8 : 0);
   r.status = motorStatus; r.error = motorError; r.output = output;
   r.i2c_errors = errors; r.missed = missed; r.work = clockUs() - begin;
   // Retain the final failing/stop sample too; completed runs freeze here.
@@ -258,10 +293,12 @@ void ownerTask(void*) {
         const char* bad = inertia::unhealthy(settings, health);
         if (!initialized || !stopConfirmed || !rows) reason = "motor_or_memory_not_ready";
         else if (const char* invalid = inertia::validate(settings)) reason = invalid;
+        else if (settings.response && !positionValid) reason = "position_read_failed";
         else if (bad) reason = bad;
         else {
           memset(pulses, 0, sizeof(pulses)); ++runCounter; pulseIndex = 0; missed = 0;
           runStart = clockUs(); phaseStart = runStart; stillSince = 0; logFrozen = false;
+          nextSample = runStart;
           phase = Phase::Settling; reason = "waiting_for_stop";
         }
       } else reason = "request_rejected_preserve_log";
@@ -270,8 +307,9 @@ void ownerTask(void*) {
     const uint64_t now = clockUs();
     if (now >= nextSample) {
       const uint64_t scheduled = nextSample;
-      missed += static_cast<uint32_t>((now - scheduled) / inertia::kSampleUs);
-      nextSample = scheduled + ((now - scheduled) / inertia::kSampleUs + 1) * inertia::kSampleUs;
+      const uint32_t period = inertia::samplePeriod(settings);
+      missed += static_cast<uint32_t>((now - scheduled) / period);
+      nextSample = scheduled + ((now - scheduled) / period + 1) * period;
       const bool wasActive = inertia::active(phase);
       sample(scheduled);
       if (wasActive && !inertia::active(phase)) publish();
@@ -294,6 +332,9 @@ void statusHandler() {
     ",\"stop_confirmed\":" + (s.stop_confirmed ? "true" : "false") +
     ",\"frozen\":" + (s.frozen ? "true" : "false") +
     ",\"rpm\":" + jsonFloat(s.rpm) + ",\"current_mA\":" + jsonFloat(s.current) +
+    ",\"position_deg\":" + jsonFloat(s.position_deg) +
+    ",\"position_valid\":" + (s.position_valid ? "true" : "false") +
+    ",\"motor_firmware\":" + s.motor_firmware + ",\"sample_period_us\":" + s.sample_period_us +
     ",\"voltage_mV\":" + s.voltage + ",\"temperature_C\":" + s.temperature +
     ",\"rows\":" + s.rows + ",\"missed\":" + s.missed + ",\"i2c_errors\":" + s.errors +
     ",\"pulse\":" + s.pulse + ",\"total\":" + s.total + ",\"run\":" + s.run + "}";
@@ -309,10 +350,11 @@ void startHandler() {
     server.send(400, "text/plain", "機体の固定を確認し、本体ボタンを離してください。"); return;
   }
   const String mode = server.arg("mode");
-  if (mode != "single" && mode != "batch") {
+  if (mode != "single" && mode != "batch" && mode != "response") {
     server.send(400, "text/plain", "modeが不正です。"); return;
   }
   c.single = mode == "single";
+  c.response = mode == "response";
   const String label = server.arg("label");
   if (!label.length() || label.length() >= sizeof(c.label)) {
     server.send(400, "text/plain", "記録名は英数字・_・-で1〜24文字です。"); return;
@@ -327,12 +369,14 @@ void startHandler() {
   c.duration_ms = n;
   if (!integerArg("repeats", n) || n < 1 || n > 5) { server.send(400, "text/plain", "反復は1〜5です。"); return; }
   c.repeats = n;
+  if (c.response) c.repeats = 3;
   if (!integerArg("limit", n) || n < 300 || n > 2500) { server.send(400, "text/plain", "回転数上限は300〜2500 rpmです。"); return; }
   c.rpm_limit = n;
   if (!integerArg("voltage", n) || n < 5000 || n > 12000) { server.send(400, "text/plain", "電圧下限が不正です。"); return; }
   c.min_voltage_mV = n;
   if (!integerArg("current", n) || n == 0 || n < -300 || n > 300) { server.send(400, "text/plain", "単発電流は±1〜300 mAです。"); return; }
   c.single_mA = n;
+  if (c.response) c.single_mA = 300;
   for (unsigned i = 0; i < 3; ++i) {
     String key = "level" + String(i + 1);
     if (!integerArg(key.c_str(), n) || n < 30 || n > 300) { server.send(400, "text/plain", "電流段階は30〜300 mAです。"); return; }
@@ -353,26 +397,33 @@ void csvHandler() {
   server.sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
   server.sendHeader("Cache-Control", "no-store");
   server.setContentLength(CONTENT_LENGTH_UNKNOWN); server.send(200, "text/csv; charset=utf-8", "");
-  String header = "# schema=atoms3r_inertia_v1\n# revision=" + String(kRevision) +
+  String header = "# schema=atoms3r_inertia_v2\n# revision=" + String(kRevision) +
     "\n# configuration=current_wheel_and_weights" +
     "\n# label=" + settings.label + "\n# run_id=" + String(bootId, HEX) + "_" + String(runCounter) +
     "\n# result=" + inertia::name(s.phase) + "\n# reason=" + s.reason +
     "\n# sample_count=" + String(s.rows) + "\n# expected_pulses=" + String(inertia::pulseCount(settings)) +
-    "\n# pulse_width_ms=" + String(settings.duration_ms) + "\n# repeats=" + String(settings.repeats) +
+    "\n# pulse_width_ms=" + String(settings.response ? 0 : settings.duration_ms) + "\n# repeats=" + String(settings.repeats) +
     "\n# rpm_limit=" + String(settings.rpm_limit) + "\n# min_voltage_mV=" + String(settings.min_voltage_mV) +
-    "\n# sample_period_us=10000\n# motor_frame=raw_driver_current_and_encoder_rpm\n# body_condition=rigidly_clamped_required\n# slow_status_period_us=100000\n";
+    "\n# sample_period_us=" + String(inertia::samplePeriod(settings)) +
+    "\n# post_period_us=" + String(inertia::postPeriod(settings)) +
+    "\n# motor_firmware=" + String(motorFirmware) +
+    "\n# profile=" + String(settings.response ? "short_pulse_response" : settings.single ? "single" : "current_levels") +
+    "\n# position_register=0x90\n# position_units=accumulated_centidegrees\n# position_signal=separate_position_readback_path_installed_fw_not_certified_unfiltered\n# motor_frame=raw_driver_current_and_encoder_rpm\n# body_condition=rigidly_clamped_required\n# slow_status_period_us=100000\n";
   server.sendContent(header);
-  server.sendContent("sample,t_us,pulse_id,phase,driver_cmd_mA,output_enabled,rpm,actual_current_mA,speed_start_us,speed_end_us,current_start_us,current_end_us,voltage_mV,temperature_C,slow_t_us,speed_valid,current_valid,status_valid,motor_status,motor_error,i2c_errors,missed_samples,sample_late_us,sample_work_us,pulse_on_us,pulse_zero_us,pulse_off_us,pulse_complete,pulse_cmd_mA\n");
+  server.sendContent("sample,t_us,pulse_id,phase,driver_cmd_mA,output_enabled,rpm,actual_current_mA,speed_start_us,speed_end_us,current_start_us,current_end_us,voltage_mV,temperature_C,slow_t_us,speed_valid,current_valid,status_valid,motor_status,motor_error,i2c_errors,missed_samples,sample_late_us,sample_work_us,pulse_on_us,pulse_zero_us,pulse_off_us,pulse_complete,pulse_cmd_mA,position_raw_cdeg,position_deg,position_start_us,position_end_us,position_valid,pulse_width_ms_setting\n");
   String chunk; chunk.reserve(4096);
   for (uint32_t i = 0; i < s.rows && server.client().connected(); ++i) {
     const Row& r = rows[i]; const Pulse& p = pulses[r.pulse - 1]; char line[640];
-    snprintf(line, sizeof(line), "%lu,%lu,%u,%s,%d,%u,%.2f,%.2f,%lu,%lu,%lu,%lu,%u,%d,%lu,%u,%u,%u,%u,%u,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%d\n",
+    snprintf(line, sizeof(line), "%lu,%lu,%u,%s,%d,%u,%.2f,%.2f,%lu,%lu,%lu,%lu,%u,%d,%lu,%u,%u,%u,%u,%u,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%d,%ld,%.2f,%lu,%lu,%u,%u\n",
       (unsigned long)i, (unsigned long)r.t, r.pulse, inertia::name(static_cast<Phase>(r.phase)), r.command, r.output,
       r.speed_raw / 100.0, r.current_raw / 100.0,
       (unsigned long)r.speed_start, (unsigned long)r.speed_end, (unsigned long)r.current_start, (unsigned long)r.current_end,
       r.voltage, r.temperature, (unsigned long)r.slow_t, !!(r.valid & 1), !!(r.valid & 2), !!(r.valid & 4), r.status, r.error,
       (unsigned long)r.i2c_errors, (unsigned long)r.missed, (unsigned long)r.late, (unsigned long)r.work,
-      (unsigned long)p.on, (unsigned long)p.zero, (unsigned long)p.off, p.complete, p.current);
+      (unsigned long)p.on, (unsigned long)p.zero, (unsigned long)p.off, p.complete, p.current,
+      (long)r.position_raw, r.position_raw / 100.0,
+      (unsigned long)r.position_start, (unsigned long)r.position_end, !!(r.valid & 8),
+      inertia::durationMs(settings, r.pulse - 1));
     chunk += line;
     if (chunk.length() >= 3500) { server.sendContent(chunk); chunk = ""; }
   }
@@ -408,7 +459,7 @@ void setup() {
   });
   server.on("/data.csv", HTTP_GET, csvHandler);
   server.begin();
-  Serial.println("AtomS3R inertia v1; Wi-Fi AtomS3R_Inertia / 12345678; http://192.168.4.1/");
+  Serial.println("AtomS3R response 1.0.2; Wi-Fi AtomS3R_Inertia / 12345678; http://192.168.4.1/");
 }
 void loop() {
   M5.update(); if (M5.BtnA.wasPressed()) stopRequested.store(true);
