@@ -1,0 +1,68 @@
+name: Build and publish Web flasher
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-pages-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install build and analysis tools
+        run: pip install platformio==6.1.18 numpy==2.2.6
+      - name: Verify measurement settings, analysis and Web controls
+        run: |
+          set -euo pipefail
+          python tools/embed_web.py --check
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          node tests/test_web.js
+          g++ -std=c++17 -Wall -Wextra -Werror tests/test_protocol.cpp -o /tmp/test_protocol
+          /tmp/test_protocol
+      - name: Build AtomS3R firmware
+        run: pio run -e atoms3r
+      - name: Package firmware and source provenance
+        run: |
+          python tools/package_release.py --out dist --framework "$HOME/.platformio/packages/framework-arduinoespressif32" --build-sha "$GITHUB_SHA"
+          git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atoms3r-motor-inertia-test-${{ github.sha }}
+          path: |
+            dist/
+            flash/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          path: flash/
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/deploy-pages@v4
+        id: deployment
+      - name: Verify published commit, flash layout and firmware hashes
+        run: python tools/verify_publication.py --url "${{ steps.deployment.outputs.page_url }}" --sha "$GITHUB_SHA"

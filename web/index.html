@@ -1,0 +1,45 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AtomS3R 電流・回転応答測定</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#183047;background:#eef2f5}body{max-width:850px;margin:auto;padding:20px}h1{font-size:1.55rem}p{line-height:1.7}.card{background:#fff;border:1px solid #d6e0e7;border-radius:12px;padding:20px;margin:16px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}label{display:block;line-height:1.6}input,select,button{font:inherit;padding:10px;border-radius:7px;border:1px solid #99acbd}input[type=number]{width:100px}button{background:#164b7a;color:white;margin:6px 5px 4px 0;border:0;cursor:pointer}button:disabled{opacity:.4;cursor:default}#stop{background:#b62335;font-weight:bold}#clear{background:#536677}small,.muted{color:#526779}.value{font-size:1.8rem;font-variant-numeric:tabular-nums}#message{min-height:28px;white-space:pre-wrap;color:#a12233}a{color:#164b7a}fieldset{border:0;padding:0;margin:0}canvas{width:100%;height:170px;border:1px solid #dce5ec}#fixed{width:auto}.notice{border-left:5px solid #ad7619;padding-left:12px}
+</style></head><body>
+<h1>AtomS3R 電流・回転応答測定</h1>
+<p>現在のホイールと重りを付けたまま、電流に対する回転の加速を測ります。<strong>機体全体を固定し、ホイールだけが回る状態で使用してください。</strong></p>
+<p id="connection">接続を確認しています…</p>
+<section class="card"><div class="grid"><div>状態<div class="value" id="phase">—</div></div><div>ホイール回転数<div class="value" id="rpm">—</div></div><div>実電流<div class="value" id="actual">—</div></div><div>電源電圧<div class="value" id="voltage">—</div></div></div>
+<p id="detail"></p><button id="stop">停止・モータ出力OFF</button><p class="muted">本体の操作ボタンでも停止できます。モータへの給電を切ると回転は惰性で続きます。回転が止まってから触れてください。</p>
+<canvas id="plot" width="780" height="170" aria-label="最近の回転数。青線が回転数です。"></canvas></section>
+<section class="card"><fieldset id="settings"><div class="grid">
+<label>記録名（英数字・_・-）<br><input id="label" value="fixed_01" maxlength="24" style="width:180px"></label>
+<label>測定方法<br><select id="mode"><option value="single">単発パルス</option><option value="batch">3段階×正逆方向×反復</option></select></label>
+<label>入力時間<br><input id="duration" type="number" min="50" max="500" step="10" value="100"> ms</label>
+<label>回転数の停止上限<br><input id="limit" type="number" min="300" max="2500" value="1500"> rpm</label>
+<label>電圧の停止下限<br><input id="voltage-limit" type="number" min="5000" max="12000" step="100" value="6000"> mV</label>
+</div>
+<p id="single-area"><label>単発の電流指令 <input id="current" type="number" min="-300" max="300" step="10" value="100"> mA（符号はモータ内部の座標です）</label></p>
+<div id="batch-area" hidden><p>正逆それぞれ、以下の3段階を測定します。反復ごとに測定順を入れ替えます。</p><div class="grid"><label>段階1 <input id="level1" type="number" min="30" max="300" value="50"> mA</label><label>段階2 <input id="level2" type="number" min="30" max="300" value="100"> mA</label><label>段階3 <input id="level3" type="number" min="30" max="300" value="150"> mA</label><label>反復回数 <input id="repeats" type="number" min="1" max="5" value="3"></label></div>
+<p class="muted">最初は50・100・150 mA、400 ms、3反復が設定候補です。単発測定で回転数と電流を確認してから使用してください。各パルスは、回転数と実電流が小さい状態を1秒確認し、さらに0.5秒記録してから始まります。入力後は出力OFFで2秒以上記録し、次の入力まで停止を待ちます。</p></div>
+<p><label><input type="checkbox" id="fixed"> 機体を固定し、ホイール・重りの取付けを確認しました。</label></p>
+<button id="start" disabled>測定を開始</button></fieldset><div id="message" role="status"></div></section>
+<section class="card"><strong>ログを保存</strong><p>入力中も回転数と実電流を約100 Hzで記録します。回転数・電流それぞれの取得開始時刻と終了時刻も保存します。</p>
+<button id="download" disabled>測定CSVを保存</button><button id="clear" disabled>ログ消去・接続と停止を再確認</button>
+<p id="log-status" class="muted"></p><p class="notice">未保存のログは電源断・再起動で失われます。次の測定を始める前に保存してください。中断・異常終了した記録も保存できます。</p>
+<p class="muted">この測定から直接求められるのは「電流に対する加速」です。慣性モーメントへの換算には独立したトルク定数が必要です。仮定した定数を使う場合は、条件付きの推定値として解析します。</p></section>
+<p class="muted">atoms3r_inertia_v1_20261016 · Wi-Fi: AtomS3R_Inertia · 192.168.4.1</p>
+<script>
+const el=id=>document.getElementById(id);let last=null,history=[],saved=false,runKey=null;
+const names={idle:'待機',settling:'停止を確認中',pre:'入力前を記録',pulse:'電流を入力中',post:'出力OFF・記録中',done:'完了',stopped:'操作で停止',fault:'異常で停止'};
+const reasons={ready:'測定できます',waiting_for_stop:'回転数±10 rpm・実電流±10 mA以内で1秒静止を待っています',recording_pre:'入力前の記録中です',current_pulse:'電流パルスを入力しています',recording_coast:'出力OFF後の惰性回転を記録しています',completed:'予定の測定が終了しました',operator_stop:'停止操作により中断しました',rpm_limit:'回転数上限に達しました',voltage_low:'電源電圧が下限を下回りました',temperature_limit:'温度上限に達しました',telemetry_read_failed:'モータ情報の取得に失敗しました',motor_error:'モータがエラーを返しました',wheel_did_not_stop_in_30s:'30秒以内に静止しませんでした',pulse_deadline_overrun:'入力終了時刻に遅延がありました',log_full:'記録領域が満杯になりました',stop_unconfirmed_cut_motor_power:'出力OFFを確認できません。モータへの給電を切ってください',motor_initialization_failed:'モータ通信・停止を確認できません。配線と給電を確認してください'};
+function modeChange(){const batch=el('mode').value==='batch';el('batch-area').hidden=!batch;el('single-area').hidden=batch;el('duration').value=batch?400:100;}
+el('mode').onchange=modeChange;
+async function post(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data||{}),signal:AbortSignal.timeout(5000)});const text=await r.text();if(!r.ok)throw Error(text);return text;}
+function chart(){const c=el('plot'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);const m=Math.max(100,...history.map(x=>Math.abs(x)));ctx.fillStyle='#526779';ctx.fillText('回転数 ±'+m.toFixed(0)+' rpm / 最近の約60秒',10,14);ctx.strokeStyle='#b8c9d7';ctx.beginPath();ctx.moveTo(0,90);ctx.lineTo(c.width,90);ctx.stroke();ctx.strokeStyle='#164b7a';ctx.beginPath();history.forEach((v,i)=>{let x=i/119*c.width,y=90-v/m*65;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y)});ctx.stroke();}
+async function update(){try{const r=await fetch('/status',{cache:'no-store',signal:AbortSignal.timeout(3000)});if(!r.ok)throw Error('status');const s=await r.json();last=s;if(runKey!==s.run){saved=false;runKey=s.run;history=[];}
+el('connection').textContent='本体に接続しています';el('phase').textContent=names[s.phase]||s.phase;el('rpm').textContent=s.rpm===null?'取得失敗':s.rpm.toFixed(1)+' rpm';el('actual').textContent=s.current_mA===null?'取得失敗':s.current_mA.toFixed(1)+' mA';el('voltage').textContent=(s.voltage_mV/1000).toFixed(2)+' V';el('detail').textContent=(reasons[s.reason]||s.reason)+' · '+s.pulse+'/'+s.total+' パルス · '+s.temperature_C+' ℃';el('settings').disabled=s.active||s.pending||s.rows>0;el('start').disabled=!s.ready||s.active||s.pending||s.rows>0||!el('fixed').checked;el('download').disabled=!s.rows||s.active||s.pending||!s.frozen;el('clear').disabled=s.active||s.pending||!s.frozen;el('log-status').textContent=s.rows+' 試料 / I²Cエラー累計 '+s.i2c_errors+' / 記録間隔の欠落 '+s.missed+' / 出力OFF確認 '+(s.stop_confirmed?'済':'未確認');if(s.rpm!==null){history.push(s.rpm);if(history.length>120)history.shift();chart();}}
+catch(e){el('connection').textContent='本体との接続を確認してください';el('start').disabled=true;}finally{setTimeout(update,500)}}
+el('fixed').onchange=()=>{el('start').disabled=!last||!last.ready||last.active||last.pending||last.rows>0||!el('fixed').checked};
+el('start').onclick=async()=>{el('start').disabled=true;try{el('message').textContent=await post('/start',{mode:el('mode').value,label:el('label').value,current:el('current').value,duration:el('duration').value,repeats:el('repeats').value,limit:el('limit').value,voltage:el('voltage-limit').value,level1:el('level1').value,level2:el('level2').value,level3:el('level3').value,fixed:el('fixed').checked?'1':'0'});}catch(e){el('message').textContent=e.message}};
+el('stop').onclick=async()=>{try{el('message').textContent=await post('/stop')}catch(e){el('message').textContent='停止要求が届いていません。本体ボタンまたはモータ給電で停止してください。'}};
+el('download').onclick=async()=>{el('download').disabled=true;try{const r=await fetch('/data.csv',{signal:AbortSignal.timeout(120000)});if(!r.ok)throw Error(await r.text());const blob=await r.blob();const disposition=r.headers.get('Content-Disposition')||'';const filename=(disposition.match(/filename="([^"]+)"/)||[])[1]||'motor_response.csv';const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),10000);saved=true;el('message').textContent='CSVの保存を開始しました。保存先を確認してください。';}catch(e){el('message').textContent='保存に失敗しました。ログを消さずに再度保存してください。'+e.message}};
+el('clear').onclick=async()=>{if(!confirm(saved?'CSVが保存されたことを確認してログを消去しますか？':'CSVの保存が確認できません。ログを消去してよいですか？'))return;try{el('message').textContent=await post('/clear');saved=false;el('fixed').checked=false;}catch(e){el('message').textContent=e.message}};
+update();
+</script></body></html>

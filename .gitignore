@@ -1,0 +1,8 @@
+.pio/
+__pycache__/
+dist/
+analysis/
+flash/firmware/
+flash/manifest.json
+flash/SHA256SUMS.txt
+flash/build-info.json
